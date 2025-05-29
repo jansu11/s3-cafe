@@ -1,0 +1,223 @@
+( function ( $ ) {
+	WpcFrontSetup = {
+		origin: '#',
+		default_selector: '.wpc-show-payment-popup',
+		custom_selector: '',
+
+		targetClicked: false,
+		targetHref: '',
+		iframeReady: false,
+
+		setup( args ) {
+			if ( this._detectSafari() ) {
+				// Do not open popup if detected Safari|ioS.
+				return false;
+			}
+
+			if ( 'undefined' !== args.target_element ) {
+				WpcFrontSetup.custom_selector = args.target_element;
+			}
+
+			this.origin = location.origin;
+
+			window.addEventListener( 'message', function ( event ) {
+				switch ( event.data ) {
+					case 'close_popup':
+						WpcFrontSetup._closePaymentPopup();
+						break;
+					case 'window_is_ready':
+						WpcFrontSetup._iframeWindowReady();
+						WpcFrontSetup.iframeReady = true;
+						break;
+					case 'MM:3PCunsupported':
+						console.log(
+							'Redirecting to the Store due to unsupported cookie access!'
+						);
+						window.location = window.WpcFrame.src;
+						WpcFrontSetup._closePaymentPopup();
+				}
+			} );
+
+			$( document ).ready( function () {
+				WpcFrontSetup.init();
+
+				window.addEventListener( 'popstate', ( event ) => {
+					jQuery( '#wpc-popup' ).css( 'visibility', 'hidden' );
+					jQuery( 'html' ).css( 'overflow', 'auto' );
+				} );
+			} );
+		},
+
+		init() {
+			sessionStorage.removeItem( 'wcp_last_visited_checkout' );
+			let all_selectors = WpcFrontSetup.default_selector;
+
+			if ( '' !== WpcFrontSetup.custom_selector ) {
+				all_selectors += ',' + WpcFrontSetup.custom_selector;
+				all_selectors +=
+					',' +
+					WpcFrontSetup.custom_selector.replace(
+						'a[href^=',
+						'a[data-href^='
+					);
+			}
+
+			all_selectors = all_selectors.trim();
+
+			jQuery(
+				'#modal-astra-bb-regular, #modal-astra-bb-bundled, #astra-bb-bundled, #astra-bb-regular'
+			).on( 'click', function ( event ) {
+				const visiting_href = $( this ).attr( 'href' );
+
+				if (
+					! visiting_href.includes(
+						'https://store.brainstormforce.com/checkout'
+					)
+				) {
+					return;
+				}
+				event.preventDefault();
+				jQuery( 'html' ).css( 'overflow', 'hidden' );
+				$( this ).attr( 'href', '#' );
+				window.history.pushState(
+					{},
+					document.title,
+					window.location.pathname
+				);
+				jQuery( 'body' ).addClass( 'wpc-full-loader' );
+				jQuery( '#wpc-popup' ).remove();
+				WpcFrontSetup.targetHref = visiting_href;
+				WpcFrontSetup._showPaymentPopup();
+				sessionStorage.setItem(
+					'wcp_last_visited_checkout',
+					visiting_href
+				);
+				WpcFrontSetup.targetClicked = true;
+				return false;
+			} );
+
+			jQuery( document ).delegate(
+				all_selectors,
+				'click',
+				function ( e ) {
+					// UABB Support.
+					if ( ! $( this ).attr( 'data-href' ) ) {
+						$( this ).attr( 'data-href', $( this ).attr( 'href' ) );
+						$( this ).attr( 'href', 'javascript:void(0);' );
+					}
+
+					e.preventDefault();
+					jQuery( 'html' ).css( 'overflow', 'hidden' );
+
+					const visiting_href = $( this ).attr( 'data-href' );
+					const has_visited = sessionStorage.getItem(
+						'wcp_last_visited_checkout'
+					);
+
+					window.history.pushState(
+						{},
+						document.title,
+						window.location.pathname
+					);
+					console.log( 'Custom back added in browser.' );
+
+					if ( has_visited !== visiting_href ) {
+						jQuery( 'body' ).addClass( 'wpc-full-loader' );
+
+						jQuery( '#wpc-popup' ).remove();
+						WpcFrontSetup.targetHref = visiting_href;
+						WpcFrontSetup._showPaymentPopup();
+
+						// Store the URL in the Local Session.
+						sessionStorage.setItem(
+							'wcp_last_visited_checkout',
+							visiting_href
+						);
+						WpcFrontSetup.targetClicked = true;
+						return;
+					}
+
+					jQuery( '#wpc-popup' ).css( 'visibility', 'visible' );
+				}
+			);
+		},
+
+		_closePaymentPopup() {
+			jQuery( '#wpc-popup' ).css( 'visibility', 'hidden' );
+		},
+
+		_iframeWindowReady() {
+			const iframe = $( '.wpc-frame' ),
+				iframe_win = iframe.get( 0 ).contentWindow;
+
+			iframe_win.postMessage( 'update_data', '*' );
+
+			iframe.animate( { opacity: 1 }, 800 );
+			$( '.wpc-popup-overlay' ).animate( { opacity: 0 }, 800 );
+
+			setTimeout( () => {
+				$( '.wpc-popup-overlay' ).remove();
+
+				if ( WpcFrontSetup.targetClicked ) {
+					jQuery( 'body' ).removeClass( 'wpc-full-loader' );
+					jQuery( '#wpc-popup' ).css( 'visibility', 'visible' );
+					WpcFrontSetup.targetClicked = false;
+
+					// Return to the astra support.
+					jQuery( '#astra-bb-regular, #astra-bb-bundled' ).attr(
+						'href',
+						'#'
+					);
+					jQuery(
+						'#modal-uabb-radio, #modal-uael-radio, #bundled-modal-uael-radio, #bundled-modal-uabb-radio'
+					).attr( 'checked', false );
+				}
+			}, 800 );
+		},
+
+		_showPaymentPopup( e ) {
+			const head =
+				document.head || document.getElementsByTagName( 'head' )[ 0 ];
+			const loader_div = '<div class="wpc-loader"></div>',
+				overlay_div =
+					'<div class="wpc-popup-overlay">' + loader_div + '</div>';
+
+			/* Init checkout */
+			window.WpcFrame = document.createElement( 'iframe' );
+			window.WpcFrame.id = 'wpc-popup';
+			window.WpcFrame.className = 'wpc-frame';
+			window.WpcFrame.frameborder = '0';
+			window.WpcFrame.allowtransparency = 'true';
+			window.WpcFrame.src = '';
+
+			if ( WpcFrontSetup.targetHref ) {
+				window.WpcFrame.src = WpcFrontSetup.targetHref;
+				WpcFrontSetup.targetHref = '';
+			}
+			window.WpcFrame.setAttribute(
+				'style',
+				'z-index: 9999999; opacity: 0; background-color: transparent; border: 0px none transparent; overflow-x: hidden; overflow-y: auto; visibility: hidden; margin: 0px; padding: 0px; -webkit-tap-highlight-color: transparent; position: fixed; left: 0px; top: 0px; width: calc( 100% - 0%); height: 100%;'
+			);
+			document
+				.getElementsByTagName( 'body' )[ 0 ]
+				.appendChild( window.WpcFrame );
+
+			window.WpcFrame.onload = function ( fr ) {
+				if ( ! WpcFrontSetup.iframeReady ) {
+					window.location.href = window.WpcFrame.src;
+				}
+			};
+		},
+
+		_detectSafari( e ) {
+			const isSafari = !! navigator.userAgent.match(
+				/Version\/[\d\.]+.*Safari/
+			);
+			const iOS =
+				/iPad|iPhone|iPod/.test( navigator.userAgent ) &&
+				! window.MSStream;
+
+			return isSafari || iOS;
+		},
+	};
+} )( jQuery );
